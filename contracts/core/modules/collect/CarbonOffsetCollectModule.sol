@@ -118,12 +118,10 @@ contract CarbonOffsetCollectModule is ICollectModule, FeeModuleBase, FollowValid
         address currency = _dataByPublicationByProfile[profileId][pubId].currency;
         _validateDataIsExpected(data, currency, amount);
 
-        uint256 offsetPercent = _dataByPublicationByProfile[profileId][pubId].offsetPercent;
-        address poolToken = _dataByPublicationByProfile[profileId][pubId].poolToken;
-
         (address treasury, uint16 treasuryFee) = _treasuryData();
         uint256 treasuryAmount = (amount * treasuryFee) / BPS_MAX;
-        uint256 offsetAmount = (amount * offsetPercent) / BPS_MAX;
+        uint256 offsetAmount = (amount *
+            _dataByPublicationByProfile[profileId][pubId].offsetPercent) / BPS_MAX;
         uint256 adjustedAmount = amount - treasuryAmount - offsetAmount;
 
         if (treasuryAmount > 0)
@@ -134,7 +132,11 @@ contract CarbonOffsetCollectModule is ICollectModule, FeeModuleBase, FollowValid
             IERC20(currency).approve(address(offsetHelper), offsetAmount);
 
             if (offsetHelper.isSwapable(currency)) {
-                offsetHelper.autoOffset(currency, poolToken, offsetAmount);
+                offsetHelper.autoOffset(
+                    currency,
+                    _dataByPublicationByProfile[profileId][pubId].poolToken,
+                    offsetAmount
+                );
             } else {
                 offsetHelper.autoOffsetUsingPoolToken(currency, offsetAmount);
             }
