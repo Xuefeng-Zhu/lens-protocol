@@ -113,11 +113,41 @@ contract CarbonOffsetCollectModule is ICollectModule, FeeModuleBase, FollowValid
         bytes calldata data
     ) external virtual override onlyHub {
         _checkFollowValidity(profileId, collector);
-        if (referrerProfileId == profileId) {
-            _processCollect(collector, profileId, pubId, data);
-        } else {
-            _processCollectWithReferral(referrerProfileId, collector, profileId, pubId, data);
+
+        uint256 amount = _dataByPublicationByProfile[profileId][pubId].amount;
+        address currency = _dataByPublicationByProfile[profileId][pubId].currency;
+        _validateDataIsExpected(data, currency, amount);
+
+        uint256 offsetPercent = _dataByPublicationByProfile[profileId][pubId].offsetPercent;
+        address poolToken = _dataByPublicationByProfile[profileId][pubId].poolToken;
+
+        (address treasury, uint16 treasuryFee) = _treasuryData();
+        uint256 treasuryAmount = (amount * treasuryFee) / BPS_MAX;
+        uint256 offsetAmount = (amount * offsetPercent) / BPS_MAX;
+        uint256 adjustedAmount = amount - treasuryAmount - offsetAmount;
+
+        if (treasuryAmount > 0)
+            IERC20(currency).safeTransferFrom(collector, treasury, treasuryAmount);
+
+        if (offsetAmount > 0) {
+            IERC20(currency).safeTransferFrom(collector, address(this), offsetAmount);
+            IERC20(currency).approve(address(offsetHelper), offsetAmount);
+
+            if (offsetHelper.isSwapable(currency)) {
+                offsetHelper.autoOffset(currency, poolToken, offsetAmount);
+            } else {
+                offsetHelper.autoOffsetUsingPoolToken(currency, offsetAmount);
+            }
         }
+
+        _processCollectWithReferral(
+            referrerProfileId,
+            collector,
+            profileId,
+            pubId,
+            adjustedAmount,
+            data
+        );
     }
 
     /**
@@ -137,93 +167,30 @@ contract CarbonOffsetCollectModule is ICollectModule, FeeModuleBase, FollowValid
         return _dataByPublicationByProfile[profileId][pubId];
     }
 
-    function _processCollect(
-        address collector,
-        uint256 profileId,
-        uint256 pubId,
-        bytes calldata data
-    ) internal {
-        uint256 amount = _dataByPublicationByProfile[profileId][pubId].amount;
-        uint256 offsetPercent = _dataByPublicationByProfile[profileId][pubId].offsetPercent;
-        address currency = _dataByPublicationByProfile[profileId][pubId].currency;
-        address poolToken = _dataByPublicationByProfile[profileId][pubId].poolToken;
-        _validateDataIsExpected(data, currency, amount);
-
-        (address treasury, uint16 treasuryFee) = _treasuryData();
-        address recipient = _dataByPublicationByProfile[profileId][pubId].recipient;
-        uint256 treasuryAmount = (amount * treasuryFee) / BPS_MAX;
-        uint256 offsetAmount = (amount * offsetPercent) / BPS_MAX;
-        uint256 adjustedAmount = amount - treasuryAmount - offsetAmount;
-
-        IERC20(currency).safeTransferFrom(collector, recipient, adjustedAmount);
-        if (offsetAmount > 0) {
-            IERC20(currency).safeTransferFrom(collector, address(this), offsetAmount);
-            IERC20(currency).approve(address(offsetHelper), offsetAmount);
-
-            if (offsetHelper.isSwapable(currency)) {
-                offsetHelper.autoOffset(currency, poolToken, offsetAmount);
-            } else {
-                offsetHelper.autoOffsetUsingPoolToken(currency, offsetAmount);
-            }
-        }
-        if (treasuryAmount > 0)
-            IERC20(currency).safeTransferFrom(collector, treasury, treasuryAmount);
-    }
-
     function _processCollectWithReferral(
         uint256 referrerProfileId,
         address collector,
         uint256 profileId,
         uint256 pubId,
+        uint256 adjustedAmount,
         bytes calldata data
     ) internal {
-        uint256 amount = _dataByPublicationByProfile[profileId][pubId].amount;
         address currency = _dataByPublicationByProfile[profileId][pubId].currency;
-        _validateDataIsExpected(data, currency, amount);
+        uint256 referralFee = _dataByPublicationByProfile[profileId][pubId].referralFee;
 
-        address treasury;
-        uint256 treasuryAmount;
-        uint256 offsetAmount = (amount *
-            _dataByPublicationByProfile[profileId][pubId].offsetPercent) / BPS_MAX;
-
-        // Avoids stack too deep
-        {
-            uint16 treasuryFee;
-            (treasury, treasuryFee) = _treasuryData();
-            treasuryAmount = (amount * treasuryFee) / BPS_MAX;
-        }
-
-        uint256 adjustedAmount = amount - treasuryAmount - offsetAmount;
-
-        if (_dataByPublicationByProfile[profileId][pubId].referralFee != 0) {
+        if (referrerProfileId == profileId && referralFee != 0) {
             // The reason we levy the referral fee on the adjusted amount is so that referral fees
             // don't bypass the treasury fee, in essence referrals pay their fair share to the treasury.
-            uint256 referralAmount = (adjustedAmount *
-                _dataByPublicationByProfile[profileId][pubId].referralFee) / BPS_MAX;
+            uint256 referralAmount = (adjustedAmount * referralFee) / BPS_MAX;
             adjustedAmount = adjustedAmount - referralAmount;
 
             address referralRecipient = IERC721(HUB).ownerOf(referrerProfileId);
 
             IERC20(currency).safeTransferFrom(collector, referralRecipient, referralAmount);
         }
+
         address recipient = _dataByPublicationByProfile[profileId][pubId].recipient;
 
         IERC20(currency).safeTransferFrom(collector, recipient, adjustedAmount);
-        if (offsetAmount > 0) {
-            IERC20(currency).safeTransferFrom(collector, address(this), offsetAmount);
-            IERC20(currency).approve(address(offsetHelper), offsetAmount);
-
-            if (offsetHelper.isSwapable(currency)) {
-                offsetHelper.autoOffset(
-                    currency,
-                    _dataByPublicationByProfile[profileId][pubId].poolToken,
-                    offsetAmount
-                );
-            } else {
-                offsetHelper.autoOffsetUsingPoolToken(currency, offsetAmount);
-            }
-        }
-        if (treasuryAmount > 0)
-            IERC20(currency).safeTransferFrom(collector, treasury, treasuryAmount);
     }
 }
