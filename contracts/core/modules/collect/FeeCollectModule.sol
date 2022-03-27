@@ -161,7 +161,7 @@ contract FeeCollectModule is ICollectModule, FeeModuleBase, FollowValidationModu
 
         uint256 adjustedAmount = amount - treasuryAmount;
 
-        if (referralFee != 0) {
+        if (referrerProfileId == profileId && referralFee != 0) {
             // The reason we levy the referral fee on the adjusted amount is so that referral fees
             // don't bypass the treasury fee, in essence referrals pay their fair share to the treasury.
             uint256 referralAmount = (adjustedAmount * referralFee) / BPS_MAX;
